@@ -806,6 +806,15 @@ func waitForAsyncRoutes(ctx context.Context, c client.Client, groupName string, 
 		if !hasAsync {
 			return nil, nil
 		}
+	} else if apierrors.IsNotFound(err) {
+		// NO PREVIEWGROUP MEANS NO ASYNC ROUTES, even more strongly than a
+		// PreviewGroup that declares none — the status this loop polls hangs
+		// off that object, so with it absent the wait below can only ever hit
+		// its two-minute timeout and kill a session whose tunnel is already
+		// carrying traffic. Absent is a real state here: the installed CRD may
+		// have refused the create (dev writes provider "local", the enum ends
+		// at github) and dev deliberately carries on without one.
+		return nil, nil
 	}
 
 	var envName string
