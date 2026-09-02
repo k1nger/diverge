@@ -521,6 +521,47 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 		}
 	}
 
+	// ALSO a legacy core/v1 Endpoints object, or the tunnel has no DNS name on
+	// a kube-dns cluster. EndpointSlice is the modern API and CoreDNS reads it;
+	// kube-dns — still GKE's resolver on many clusters — predates it and
+	// resolves a headless Service only from Endpoints. Without this the Service
+	// exists, the EndpointSlice is Ready, and the name is NXDOMAIN, so a caller
+	// reaching the tunnel by name gets "no such host" while a direct pod IP
+	// works — which reads as an intermittent reset rather than a DNS gap.
+	// Verified on GKE: with only the slice, NXDOMAIN; add this, resolves.
+	// Writing both is portable — CoreDNS honours either.
+	//
+	// core/v1 Endpoints is deprecated in favour of EndpointSlice, which is the
+	// whole reason this object is here: the resolvers that need it are the
+	// ones that predate the slice. It is still served and still reconciled.
+	endpoints := &corev1.Endpoints{ //nolint:staticcheck // kube-dns resolves a headless Service only from core/v1 Endpoints
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      svcName,
+			Namespace: reg.Namespace,
+			Labels: map[string]string{
+				"diverge.dev/tunnel":     "true",
+				"diverge.dev/preview-id": reg.PreviewId,
+			},
+		},
+		Subsets: []corev1.EndpointSubset{{ //nolint:staticcheck // see above
+			Addresses: []corev1.EndpointAddress{{IP: podIP}},
+			Ports:     []corev1.EndpointPort{{Port: proxyPort, Protocol: corev1.ProtocolTCP}},
+		}},
+	}
+	if _, err := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Create(ctx, endpoints, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create endpoints: %w", err)
+		}
+		existing, getErr := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Get(ctx, endpoints.Name, metav1.GetOptions{})
+		if getErr != nil {
+			return fmt.Errorf("failed to get existing endpoints: %w", getErr)
+		}
+		endpoints.ResourceVersion = existing.ResourceVersion
+		if _, updateErr := tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Update(ctx, endpoints, metav1.UpdateOptions{}); updateErr != nil {
+			return fmt.Errorf("failed to update endpoints: %w", updateErr)
+		}
+	}
+
 	return nil
 }
 
@@ -528,6 +569,7 @@ func (tm *TunnelManager) deleteTunnelResources(ctx context.Context, reg *pb.Tunn
 	svcName := fmt.Sprintf("diverge-tunnel-%s", reg.PreviewId)
 	_ = tm.k8sClient.CoreV1().Services(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
 	_ = tm.k8sClient.DiscoveryV1().EndpointSlices(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
+	_ = tm.k8sClient.CoreV1().Endpoints(reg.Namespace).Delete(ctx, svcName, metav1.DeleteOptions{})
 }
 
 func (tm *TunnelManager) refreshTunnelTTL(ctx context.Context, reg *pb.TunnelRegister) {
