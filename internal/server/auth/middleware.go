@@ -31,6 +31,13 @@ type MiddlewareConfig struct {
 	Metrics        *AuthMetrics
 	ExemptPaths    []string
 	ExemptPrefixes []string
+	// LoginURL, when set, is where an unauthenticated BROWSER NAVIGATION is
+	// redirected instead of receiving the raw 401 below. A signed-out human
+	// loading the dashboard is the routine case — every session expires — and
+	// "missing or invalid authorization header" as a bare page is an error
+	// message for a state that is not an error. API callers, and anything not
+	// asking for text/html, keep the 401 they can act on.
+	LoginURL string
 }
 
 // NewMiddleware creates net/http middleware that authenticates requests via
@@ -68,6 +75,14 @@ func NewMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 					cfg.AuditLogger.LogAuth(r.Context(), "auth.failure", nil, r, slog.String("reason", "missing_token"))
 				} else {
 					cfg.Logger.Warn("auth.failure", "reason", "missing_token", "path", r.URL.Path, "source_ip", r.RemoteAddr)
+				}
+				// A browser navigating to a page gets sent to sign in; only
+				// GET is redirected, so a state-changing request can never be
+				// silently replayed through a login flow.
+				if cfg.LoginURL != "" && r.Method == http.MethodGet &&
+					strings.Contains(r.Header.Get("Accept"), "text/html") {
+					http.Redirect(w, r, cfg.LoginURL, http.StatusSeeOther)
+					return
 				}
 				http.Error(w, "missing or invalid authorization header", http.StatusUnauthorized)
 				return

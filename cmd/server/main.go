@@ -299,6 +299,15 @@ func main() {
 		},
 		ExemptPaths:    []string{"/healthz", "/readyz"},
 		ExemptPrefixes: exemptPrefixes,
+		// Only meaningful when SSO is configured: a signed-out browser
+		// navigation goes to sign-in instead of a bare 401 page. Every
+		// session expires, so this is the routine path, not an edge.
+		LoginURL: func() string {
+			if oidcIssuerURL != "" {
+				return "/auth/login"
+			}
+			return ""
+		}(),
 	})
 
 	// Build the ConnectRPC mux
