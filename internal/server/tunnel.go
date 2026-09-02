@@ -16,6 +16,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -442,11 +443,20 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 			},
 		},
 		Spec: corev1.ServiceSpec{
-			Type:      corev1.ServiceTypeClusterIP,
-			ClusterIP: "None",
+			// A REAL ClusterIP, NOT headless. A headless Service does no port
+			// remapping: a caller resolves it to the backing pod IP and
+			// connects on whatever port it names, so publishing reg.Port
+			// (8099, the developer's LOCAL port) sent every consumer to a port
+			// nothing listens on — the proxy is on TunnelProxyPort. A real
+			// ClusterIP lets kube-proxy DNAT Port -> TargetPort, so the name
+			// consumers already use reaches the proxy. It also resolves under
+			// kube-dns from the Service's own ClusterIP, without depending on
+			// the resolver reading endpoints at all.
+			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{{
-				Port:     reg.Port,
-				Protocol: corev1.ProtocolTCP,
+				Port:       reg.Port,
+				TargetPort: intstr.FromInt32(TunnelProxyPort),
+				Protocol:   corev1.ProtocolTCP,
 			}},
 		},
 	}
