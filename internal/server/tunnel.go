@@ -470,6 +470,17 @@ func (tm *TunnelManager) createTunnelResources(ctx context.Context, reg *pb.Tunn
 		Endpoints: []discoveryv1.Endpoint{
 			{
 				Addresses: []string{podIP},
+				// Ready MUST be set true. This backs a HEADLESS Service, and
+				// CoreDNS only publishes A records for headless-Service
+				// endpoints whose Ready condition is true — a nil condition is
+				// treated as not-ready, so the tunnel's DNS name resolves to
+				// NOTHING (NXDOMAIN) and a caller reaching it by Service name
+				// gets "no such host". Left nil, the tunnel authenticates,
+				// registers, carries a direct-IP request, and is still
+				// unreachable by the name every consumer actually uses.
+				Conditions: discoveryv1.EndpointConditions{
+					Ready: func() *bool { b := true; return &b }(),
+				},
 			},
 		},
 		Ports: []discoveryv1.EndpointPort{
