@@ -372,6 +372,21 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// Without TLS there is no ALPN, so net/http alone never negotiates HTTP/2
+	// and answers a prior-knowledge HTTP/2 preface with 505 HTTP Version Not
+	// Supported. TunnelService/Tunnel is a bidirectional stream, which
+	// connect-go refuses over HTTP/1.1 — so a plaintext deployment (the
+	// chart's default; it sets no --tls-cert-file) could authenticate a tunnel
+	// and then never establish one. Unencrypted HTTP/2 and HTTP/1.1 are served
+	// side by side on the same listener, leaving the dashboard's browser
+	// traffic untouched. With TLS the standard ALPN path already provides
+	// HTTP/2, so the default protocol set is kept.
+	if tlsCertFile == "" || tlsKeyFile == "" {
+		mainSrv.Protocols = new(http.Protocols)
+		mainSrv.Protocols.SetHTTP1(true)
+		mainSrv.Protocols.SetUnencryptedHTTP2(true)
+	}
+
 	// Metrics server
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(crmetrics.Registry, promhttp.HandlerOpts{}))

@@ -262,15 +262,26 @@ func TestTunnelClient_Reconnect(t *testing.T) {
 // tunnel connecting with no credential at all. The server authenticates every
 // Tunnel RPC by TokenReview and rejects an unauthenticated request with 401,
 // so the header has to reach the wire.
+//
+// The stub serves unencrypted HTTP/2, because the real plaintext server does and the client
+// now dials http:// with prior-knowledge HTTP/2 — the only version connect-go
+// carries a bidirectional stream over. A plain HTTP/1.1 stub here would fail
+// on the preface, which is precisely the 505 this transport exists to fix.
 func TestNewTunnelClient_SendsAuthorizationHeader(t *testing.T) {
 	var gotAuth string
+	var gotProto string
 	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		gotAuth = r.Header.Get("Authorization")
+		gotProto = r.Proto
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
+	srv.Config.Protocols = new(http.Protocols)
+	srv.Config.Protocols.SetHTTP1(true)
+	srv.Config.Protocols.SetUnencryptedHTTP2(true)
+	srv.Start()
 	defer srv.Close()
 
 	tc := NewTunnelClient(srv.URL, 8080, "preview-1", "svc", "ns", "s3cret-token", slog.Default())
@@ -284,6 +295,9 @@ func TestNewTunnelClient_SendsAuthorizationHeader(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, "Bearer s3cret-token", gotAuth)
+	// The header arriving over HTTP/1.1 would pass the assertion above while
+	// the actual tunnel stream still got 505, so the version is pinned too.
+	assert.Equal(t, "HTTP/2.0", gotProto)
 }
 
 // TestTunnelAuthTransport_DoesNotMutateRequest pins the RoundTripper contract:

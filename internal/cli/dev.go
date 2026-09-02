@@ -382,7 +382,7 @@ dev:
 			return tokenErr
 		}
 
-		tc := NewTunnelClientWithTokenSource(sAddr, int(port), headerValue, serviceName, ns, tokenSource, nil, slog.Default())
+		tc := NewTunnelClientWithTokenSource(sAddr, int(port), headerValue, serviceName, ns, tokenSource, tunnelBaseTransport(sAddr), slog.Default())
 		go tc.ConnectWithRetry(ctx)
 
 		select {

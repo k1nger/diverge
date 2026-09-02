@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+
 	pb "github.com/divergedev/diverge/api/gen/diverge/v1alpha1"
 	"github.com/divergedev/diverge/api/gen/diverge/v1alpha1/divergev1alpha1connect"
 )
@@ -85,6 +86,28 @@ func (t *tunnelAuthTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return t.base.RoundTrip(clone)
 }
 
+// tunnelBaseTransport picks a transport that can actually carry the Tunnel
+// stream. It is bidirectional, which connect-go only supports over HTTP/2 —
+// and without TLS there is no ALPN, so the default transport stays on
+// HTTP/1.1 and the server answers the stream with 505 HTTP Version Not
+// Supported. For a plaintext server the only option is prior-knowledge HTTP/2
+// (h2c): a transport whose only protocol for http:// is unencrypted HTTP/2,
+// which net/http speaks as prior knowledge. Over https the
+// default transport already negotiates HTTP/2 through ALPN, so it is kept.
+// (tunnelAuthTransport separately refuses plaintext to anything but loopback,
+// so in practice h2c only ever reaches a port-forward.) The constructors that
+// build a real tunnel pass this in; a nil base transport still means the
+// default, so callers that only need plain requests are unaffected.
+func tunnelBaseTransport(serverAddr string) http.RoundTripper {
+	if !strings.HasPrefix(serverAddr, "http://") {
+		return http.DefaultTransport
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Protocols = new(http.Protocols)
+	t.Protocols.SetUnencryptedHTTP2(true)
+	return t
+}
+
 // NewTunnelClientWithTokenSource creates a TunnelClient using a dynamic TokenSource and optional
 // base transport (defaults to http.DefaultTransport).
 func NewTunnelClientWithTokenSource(
@@ -128,7 +151,7 @@ func NewTunnelClientWithTokenSource(
 
 // NewTunnelClient is a backward-compatible wrapper creating a TunnelClient with a static token.
 func NewTunnelClient(serverAddr string, localPort int, previewID, service, namespace, token string, logger *slog.Logger) *TunnelClient {
-	return NewTunnelClientWithTokenSource(serverAddr, localPort, previewID, service, namespace, StaticTokenSource(token), nil, logger)
+	return NewTunnelClientWithTokenSource(serverAddr, localPort, previewID, service, namespace, StaticTokenSource(token), tunnelBaseTransport(serverAddr), logger)
 }
 
 func (tc *TunnelClient) ConnectWithRetry(ctx context.Context) {
