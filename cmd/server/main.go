@@ -373,10 +373,23 @@ func main() {
 	// Main server — do NOT bind signal context to BaseContext
 	// as it would cancel in-flight requests immediately on SIGTERM,
 	// bypassing graceful shutdown. Let Shutdown() handle draining.
+	// NO ReadTimeout, and that is not a relaxation of a security control — it
+	// is the difference between the tunnel working and not. ReadTimeout bounds
+	// the WHOLE request including the body, and TunnelService/Tunnel is a
+	// bidirectional stream whose request body never ends. A 30s ReadTimeout
+	// therefore severed every tunnel at exactly 30 seconds — measured,
+	// was_connected=30.31s then "deadline_exceeded: i/o timeout" then
+	// reconnect, forever — which made previews usable only for sub-30s bursts
+	// and left a dead window on every cycle.
+	//
+	// ReadHeaderTimeout still bounds the headers, so slowloris is still
+	// refused; IdleTimeout still reaps idle keep-alive connections. What is
+	// removed is only the deadline on a body that is a stream by design. The
+	// dashboard's ordinary requests finish well inside IdleTimeout and are
+	// unaffected.
 	mainSrv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
-		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
