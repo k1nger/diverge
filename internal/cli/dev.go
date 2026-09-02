@@ -451,6 +451,20 @@ dev:
 			if updateErr := c.Update(ctx, &existing); updateErr != nil {
 				return fmt.Errorf("failed to update PreviewGroup: %w", updateErr)
 			}
+		} else if apierrors.IsInvalid(err) {
+			// A DEGRADED SESSION, NOT A DEAD ONE. The installed CRD refuses
+			// this spec — today that is guaranteed: dev sets
+			// spec.source.provider to "local" and the CRD's enum has only
+			// gitlab and github, so this create has never once succeeded
+			// against the product's own definition. The PreviewGroup drives
+			// controller-side routing and ownership; the TUNNEL depends on
+			// neither, and a consumer that routes by the tunnel's Service name
+			// works without it. Killing the session here tears down a tunnel
+			// that just finished establishing, for the sake of an object the
+			// session can live without.
+			fmt.Printf("⚠️  PreviewGroup not created (the installed CRD refused it): %v\n", err)
+			fmt.Println("   Continuing without one: controller-managed routing and ownership")
+			fmt.Println("   checks are unavailable; the tunnel itself is unaffected.")
 		} else {
 			return fmt.Errorf("failed to create PreviewGroup: %w", err)
 		}
